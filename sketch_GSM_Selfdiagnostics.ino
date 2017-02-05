@@ -32,146 +32,217 @@ boolean mikrikOn = false; // Флаг счетчика срабатываний 
 
 void setup()
 {
-// писк бузера
-//программный запуск модуля
-//Serial.begin(19200);     // GSM SMS-передача плата SIM900
-Serial.begin(9600);      // тестовая Связь по терминалу
-//delay(2000);
-//GSMSetup();           //Функция  Настройки SIM900
-//сигнал о готовности
+	// писк бузера
+	//программный запуск модуля
+	//Serial.begin(19200);     // GSM SMS-передача плата SIM900
+	Serial.begin(9600);      // тестовая Связь по терминалу
+	//delay(2000);
+	//GSMSetup();           //Функция  Настройки SIM900
+	//сигнал о готовности
 
-pinMode(mikrik, INPUT);
-//pinMode(modulestart, OUTPUT);
-pinMode(startengine, OUTPUT);
-pinMode(oil, INPUT);
+	pinMode(mikrik, INPUT);
+	//pinMode(modulestart, OUTPUT);
+	pinMode(startengine, OUTPUT);
+	pinMode(oil, INPUT);
 
-resGlobal = 10000; //cчитать счетчик из EEPROM, присвоено тестовое значение
-resOper = resGlobal;
-digitalWrite(startengine, HIGH);
-//писк бузера
+	resGlobal = 10000; //cчитать счетчик из EEPROM, присвоено тестовое значение
+	resOper = resGlobal;
+	digitalWrite(startengine, HIGH);
+	//писк бузера
 }
 
 
 
 void loop()
 {
-oilstate = digitalRead(oil);
-mikrikstate = digitalRead(mikrik);
+	oilstate = digitalRead(oil);
+	mikrikstate = digitalRead(mikrik);
 
-//проверяем на критические состояния
+	//проверяем на критические состояния
 
-// Мониторинг питания для записи счетчика в память при выключении
-if (analogRead(powerpin)< 512) 
-  {
-   allert = true;
-   Serial.println("Power down!"); // Тестовое сообщение
-   //запись значения счетчика ресурса в память 
-   // писк бузера
-   }
+	// Мониторинг питания для записи счетчика в память при выключении
+	if (analogRead(powerpin)< 512) 
+	{
+		allert = true;
+		Serial.println("Power down!"); // Тестовое сообщение
+		//запись значения счетчика ресурса в память 
+		// писк бузера
+	}
+	else if (oilstate == HIGH) // Проверка датчика масла
+	{
+		allert = true;
+		Serial.println("Low oil!");
+		if (!smsoil)
+		StartFirstSMS();
+		Serial2.println("Alarm! Utechka masla");
+		EndSMS(); 
+		// писк бузера
+		// отправка сообщения о критическом уровне масла
+	}
+	else if (resOper > 1476000)
+	{
+		allert = true;
+		// сообщение о критической необходимости замены масла
+		// писк бузера 
+	}
+	else
+	{
+		allert = false;
+	}
 
-// Проверка датчика масла
-else if (oilstate == HIGH)
+
+	if (allert == true) //блокировка двигателя при аварии
+	{
+		digitalWrite(startengine, HIGH);
+
+		if(!beginRes && engine)
+		{
+			resStop = (millis() - beginRes);
+			resOper += resStop;
+			Serial.println("allert engine stop, write to EEPROM = "); // тестовый вывод наработки с начала работы программы
+			Serial.println(resOper);
+			engine = false;
+		}
+
+	}
+	else if (mikrikstate == HIGH)//запуск двигателя при замкнутом микрике 
+	{
+		digitalWrite(startengine, LOW);
+		stoptime = false;
+
+		if(!engine)
+		{
+			beginRes = millis(); //запуск счетчика ресурса в цикле работы двигателя
+			engine = true; //переключение флага работы двигателя
+			mikrikcounter++;
+		}
+	} 
+	else if (!stoptime)//запуск задержки остановки двигателя
+	{
+		stopengine = millis();
+
+		stoptime = true;
+	}
+	else if ((millis() - stopengine) >= 5000)//установка задержки остановки двигателя
+	{
+		digitalWrite(startengine, HIGH); 
+		if (engine)
+		{
+			resStop = (millis() - beginRes);
+			// resGlobal3 = int(resStop);
+			resOper = (resOper + resStop);
+			Serial.println("engine off, write to EEPROM = "); //тестовый вывод ресурса наработки со времени старта программы
+			Serial.println(resOper);
+			engine = false;
+		}
+	}
+	// Определение повреждения в системе высокого давления, если микрик сработал три раза за определенное время
+	if (mikrikstate == HIGH) // Счетчик срабатываний микрика
+	  {
+		if (mikrikOn == false && (millis()- bounce) > 500)
+		 {
+		    bounce = millis();
+		    mikrikcounter++;
+		    Serial.println(mikrikcounter); //тестовый вывод срабатываний микрика
+		    mikrikOn = true;
+		    if (tensionflag == false)  
+			{
+				tensioncounter = millis();
+				tensionflag = true;
+			}
+		 }
+	  }
+	else
+	  {
+	   mikrikOn = false;
+	  } 
+
+
+	if ((millis() - tensioncounter) >= 3000)
+	{
+		tensioncounter = millis();
+		tensionflag = false;
+		if (mikrikcounter > 2)
+		 { 
+		  mikrikcounter = 0;
+		  Serial.println("Tension allert"); //Тестовый отчет о проблеме в контуре высокого давления
+		  //бузер про обрыв контура давления
+		  //СМС о том же
+		 }   
+		else 
+		  {
+		  mikrikcounter = 0;
+		  }
+	}
+
+function smsProcessing()
 {
-  allert = true;
-  Serial.println("Low oil!");
-  if (smsoil = false)
-  StartFirstSMS(); Serial2.println("Alarm! Utechka masla"); EndSMS(); 
- // писк бузера
-//  отправка сообщения о критическом уровне масла
-
+	String smsText;
+	int operatorEndIndex;
+	bool haveNewSms;
+	
+	if (haveNewSms)
+	{
+		smsText = getLastSmsText();
+		
+		operatorEndIndex = smsText.indexOf(';');
+		String operator = smsText.substring(0, operatorEndIndex).toLowerCase();
+		
+		if (operator == "delay_engine")
+		{
+			String newDelayValuesFromFirstParam = getParamFromSmsText(smsText, 1);
+			setEngineDelay(newDelayValuesFromFirstParam.toInt());
+		}
+		else if (operator == "engine_stop")
+		{
+			setEngineStatus(false);
+		}
+		else if (operator == "set_time")
+		{
+			int hours = getParamFromSmsText(smsText, 1);
+			int minutes = getParamFromSmsText(smsText, 2);
+			int seconds = getParamFromSmsText(smsText, 3);
+			
+			setSystemTime(hours, minutes, seconds);
+		}
+		else
+		{
+			sendErrorSms("operator incorrect");
+		}
+	}
 }
-else if (resOper > 1476000)
-  {
-  allert = true;
-//  сообщение о критической необходимости замены масла
-// писк бузера 
-  }
-else
-  {
-  allert = false;
-  }
-if (allert == true) //блокировка двигателя при аварии
-  {
-  digitalWrite(startengine, HIGH);
 
-  if((beginRes != 0) & (engine == true))
-  {
-    resStop = (millis() - beginRes);
-    resOper = (resOper + resStop);
-    Serial.println("allert engine stop, write to EEPROM = "); // тестовый вывод наработки с начала работы программы
-    Serial.println(resOper);
-    engine = false;
-  }
-  
-  }
-else if (mikrikstate == HIGH)//запуск двигателя при замкнутом микрике 
-  {
-  digitalWrite(startengine, LOW);
-  stoptime = false;
-  if(engine == false)
-    {
-      beginRes = millis(); //запуск счетчика ресурса в цикле работы двигателя
-      engine = true; //переключение флага работы двигателя
-      mikrikcounter = mikrikcounter ++;
-    }
-  } 
-else if (stoptime == false)//запуск задержки остановки двигателя
-  {
-  stopengine = millis();
-
-  stoptime = true;
-  }
-else if ((millis() - stopengine) >= 5000)//установка задержки остановки двигателя
-  {
-  digitalWrite(startengine, HIGH); 
-  if (engine == true)
-    {
-    resStop = (millis() - beginRes);
-    // resGlobal3 = int(resStop);
-     resOper = (resOper + resStop);
-     Serial.println("engine off, write to EEPROM = "); //тестовый вывод ресурса наработки со времени старта программы
-     Serial.println(resOper);
-     engine = false;
-     }
-   }
-// Определение повреждения в системе высокого давления, если микрик сработал три раза за определенное время
-if (mikrikstate == HIGH) // Счетчик срабатываний микрика
-  {
-    if (mikrikOn == false && (millis()- bounce) > 500)
-     {
-        bounce = millis();
-        mikrikcounter = ++mikrikcounter;
-        Serial.println(mikrikcounter); //тестовый вывод срабатываний микрика
-        mikrikOn = true;
-        if (tensionflag = false)  
-         {
-            tensioncounter = millis();
-            tensionflag = true;
-         }
-     }
-  }
-else
-  {
-   mikrikOn = false;
-  } 
-
-
-if ((millis() - tensioncounter) >= 3000)
-  {
-   tensioncounter = millis();
-   tensionflag = false;
-   if (mikrikcounter > 2)
-     { 
-      mikrikcounter = 0;
-      Serial.println("Tension allert"); //Тестовый отчет о проблеме в контуре высокого давления
-      //бузер про обрыв контура давления
-      //СМС о том же
-     }   
-   else 
-      {
-      mikrikcounter = 0;
-      }
-  }
+function getParamFromSmsText(text, opIndex = 1)
+{
+	int delimitersFoundCount = 0;
+	int operatorStartIndex = 0;
+	int operatorEndIndex = 0;
+	
+	for(i = 0; i < text.length(); i++)
+	{
+		if (text[i] == ';')
+		{
+			delimitersFoundCount++; // Нашли первый или очередной разделитель
+		}
+		
+		if (delimitersFoundCount == opIndex)
+		{
+			operatorStartIndex = i; // Запоминаем индекс начала оператора (точнее ; с которой начнётся оператор)
+		}
+		
+		if (operatorStartIndex > 0 && (delimitersFoundCount - opIndex == 1)) // Если мы нашли и начало и конец
+		{
+			operatorEndIndex = i;
+		}
+	}
+	
+	if (operatorEndIndex == 0) // Если мы не нашли следующий разделитеь, то используем конец строки
+	{
+		operatorEndIndex = text.length();
+	}
+	
+	return text.substring(operatorStartIndex + 1, operatorEndIndex);
+}
 
 /* Бузер
 tone(9, 880, 500);
